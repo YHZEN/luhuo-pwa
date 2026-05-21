@@ -23,6 +23,31 @@
     body { overscroll-behavior-y: contain; padding-bottom: env(safe-area-inset-bottom); }
     .safe-top { padding-top: env(safe-area-inset-top); }
     .safe-bottom { padding-bottom: calc(4rem + env(safe-area-inset-bottom)); }
+    .sheet-panel {
+      max-height: min(88dvh, 100%);
+      height: min(88dvh, 100%);
+    }
+    .sheet-scroll {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+    }
+    .sheet-footer {
+      flex-shrink: 0;
+      padding: 0.5rem 1rem calc(0.625rem + env(safe-area-inset-bottom));
+      background: inherit;
+      border-top: 1px solid rgb(229 231 235);
+      box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.06);
+    }
+    .dark .sheet-footer { border-top-color: rgb(55 65 81); box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.25); }
+    .modal-scroll {
+      max-height: min(70dvh, 100%);
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+    }
     .tab-active { color: #16a34a; }
     .dark .tab-active { color: #4ade80; }
     .swipe-wrap { touch-action: pan-y; }
@@ -330,7 +355,7 @@
   </main>
 
   <!-- Bottom Nav -->
-  <nav class="fixed bottom-0 left-0 right-0 bg-white/95 dark:bg-gray-800/95 backdrop-blur border-t border-gray-200 dark:border-gray-700 z-40" style="padding-bottom: env(safe-area-inset-bottom)">
+  <nav v-show="!showForm" class="fixed bottom-0 left-0 right-0 bg-white/95 dark:bg-gray-800/95 backdrop-blur border-t border-gray-200 dark:border-gray-700 z-40" style="padding-bottom: env(safe-area-inset-bottom)">
     <div class="flex max-w-lg mx-auto">
       <button v-for="n in navItems" :key="n.id" @click="switchTab(n.id)" class="flex-1 py-2 flex flex-col items-center text-xs active:scale-95 transition-transform" :class="tab===n.id?'tab-active':'text-gray-400'">
         <span class="text-lg mb-0.5">{{ n.icon }}</span>{{ n.label }}
@@ -339,13 +364,14 @@
   </nav>
 
   <!-- Order Form Modal -->
-  <div v-if="showForm" class="fixed inset-0 z-50 flex flex-col bg-black/40" @click.self="closeForm">
-    <div class="mt-auto max-h-[92vh] bg-white dark:bg-gray-800 rounded-t-2xl overflow-hidden flex flex-col safe-bottom">
-      <div class="flex justify-between items-center px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+  <div v-if="showForm" class="fixed inset-0 z-50 flex flex-col justify-end bg-black/40 overscroll-none" @click.self="closeForm">
+    <div class="sheet-panel w-full max-w-lg mx-auto bg-white dark:bg-gray-800 rounded-t-2xl overflow-hidden flex flex-col shadow-2xl" @click.stop>
+      <div class="flex-shrink-0 flex justify-between items-center px-4 py-3 border-b border-gray-200 dark:border-gray-700">
         <h2 class="font-bold">{{ editingOrder?'编辑订单':'新订单' }}</h2>
-        <button @click="closeForm" class="text-gray-500 text-xl leading-none">&times;</button>
+        <button type="button" @click="closeForm" class="text-gray-500 text-2xl leading-none w-10 h-10 flex items-center justify-center -mr-2" aria-label="关闭">&times;</button>
       </div>
-      <form @submit.prevent="saveOrder" class="overflow-y-auto flex-1 px-4 py-3 space-y-3 text-sm">
+      <form @submit.prevent="saveOrder" class="flex flex-col flex-1 min-h-0">
+        <div class="sheet-scroll px-4 py-3 space-y-3 text-sm">
         <div v-if="form.orderNo" class="text-xs text-gray-500">单号 {{ form.orderNo }}</div>
         <div>
           <label class="text-gray-500 text-xs">商品名称 *</label>
@@ -388,21 +414,26 @@
           <input v-model="form.tagsStr" placeholder="如：手机,配件" class="w-full mt-1 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900" @input="saveDraft"></div>
         <div><label class="text-gray-500 text-xs">备注</label>
           <textarea v-model="form.notes" rows="2" class="w-full mt-1 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900" @input="saveDraft"></textarea></div>
-        <button type="submit" :disabled="formSaving" class="w-full py-3 bg-brand-600 text-white rounded-xl font-medium active:scale-[.98] disabled:opacity-60 mb-4">
-          {{ formSaving?'保存中...':'保存订单' }}
-        </button>
+        </div>
+        <div class="sheet-footer">
+          <button type="submit" :disabled="formSaving" class="w-full py-3.5 bg-brand-600 text-white rounded-xl font-medium active:scale-[.98] disabled:opacity-60">
+            {{ formSaving?'保存中...':'保存订单' }}
+          </button>
+        </div>
       </form>
     </div>
   </div>
 
   <!-- Confirm Modal -->
-  <div v-if="confirmDlg.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
-    <div class="bg-white dark:bg-gray-800 rounded-2xl p-5 max-w-sm w-full shadow-xl">
-      <p class="font-medium mb-2">{{ confirmDlg.title }}</p>
-      <p class="text-sm text-gray-500 mb-4">{{ confirmDlg.msg }}</p>
-      <div class="flex gap-2">
-        <button @click="confirmDlg.show=false" class="flex-1 py-2 rounded-lg border border-gray-200 dark:border-gray-600 active:scale-95">取消</button>
-        <button @click="confirmDlg.onOk();confirmDlg.show=false" class="flex-1 py-2 rounded-lg bg-brand-600 text-white active:scale-95">{{ confirmDlg.okText||'确定' }}</button>
+  <div v-if="confirmDlg.show" class="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/50 p-4 overscroll-none" style="padding-bottom: max(1rem, env(safe-area-inset-bottom));">
+    <div class="bg-white dark:bg-gray-800 rounded-2xl max-w-sm w-full shadow-xl flex flex-col max-h-[min(85dvh,100%)]" @click.stop>
+      <div class="modal-scroll p-5 pb-3">
+        <p class="font-medium mb-2">{{ confirmDlg.title }}</p>
+        <p class="text-sm text-gray-500">{{ confirmDlg.msg }}</p>
+      </div>
+      <div class="flex-shrink-0 flex gap-2 p-4 pt-2 border-t border-gray-200 dark:border-gray-700">
+        <button type="button" @click="confirmDlg.show=false" class="flex-1 py-3 rounded-lg border border-gray-200 dark:border-gray-600 active:scale-95">取消</button>
+        <button type="button" @click="confirmDlg.onOk();confirmDlg.show=false" class="flex-1 py-3 rounded-lg bg-brand-600 text-white active:scale-95">{{ confirmDlg.okText||'确定' }}</button>
       </div>
     </div>
   </div>
@@ -1310,6 +1341,12 @@ createApp({
     }
 
     watch(tab, (v) => { if (v === 'stats') nextTick(() => refreshCharts()); });
+
+    watch(() => showForm.value || confirmDlg.show, (open) => {
+      const lock = open ? 'hidden' : '';
+      document.documentElement.style.overflow = lock;
+      document.body.style.overflow = lock;
+    });
 
     onMounted(async () => {
       setupManifest();
