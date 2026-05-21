@@ -16,7 +16,6 @@
     tailwind.config = { darkMode: 'class', theme: { extend: { colors: { brand: { 50:'#f0fdf4',100:'#dcfce7',200:'#bbf7d0',300:'#86efac',400:'#4ade80',500:'#22c55e',600:'#16a34a',700:'#15803d',800:'#166534',900:'#14532d' } } } } };
   </script>
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/idb@8/build/umd.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
     [v-cloak] { display: none !important; }
@@ -424,20 +423,64 @@ function makeIcon(size) {
 const ICON192 = makeIcon(192);
 const ICON512 = makeIcon(512);
 
-// --- IndexedDB ---
+// --- IndexedDB（原生 API，不依赖 CDN，手机端更稳定）---
+let idbConn;
 let db;
-async function openDB() {
-  db = await idb.openDB(DB_NAME, DB_VER, {
-    upgrade(database) {
-      const os = database.createObjectStore('orders', { keyPath: 'id' });
-      os.createIndex('createdAt', 'createdAt');
-      os.createIndex('status', 'status');
-      os.createIndex('orderNo', 'orderNo');
-      database.createObjectStore('settings', { keyPath: 'key' });
-      database.createObjectStore('meta', { keyPath: 'key' });
-    }
+
+function idbReq(storeName, mode, fn) {
+  return new Promise((resolve, reject) => {
+    const tx = idbConn.transaction(storeName, mode);
+    const store = tx.objectStore(storeName);
+    const req = fn(store);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new DOMException('IndexedDB 操作失败'));
+    tx.onabort = () => reject(tx.error || new DOMException('IndexedDB 事务中止'));
   });
+}
+
+async function openDB() {
+  if (!window.indexedDB) {
+    throw new Error('当前环境不支持本地存储，请用 Safari/Chrome 打开，并关闭隐私/无痕模式');
+  }
+  idbConn = await new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VER);
+    req.onerror = () => reject(req.error || new Error('无法打开本地数据库'));
+    req.onblocked = () => reject(new Error('数据库被占用，请关闭其他打开本页的标签后刷新'));
+    req.onupgradeneeded = (e) => {
+      const database = e.target.result;
+      if (!database.objectStoreNames.contains('orders')) {
+        const os = database.createObjectStore('orders', { keyPath: 'id' });
+        os.createIndex('createdAt', 'createdAt', { unique: false });
+        os.createIndex('status', 'status', { unique: false });
+        os.createIndex('orderNo', 'orderNo', { unique: false });
+      }
+      if (!database.objectStoreNames.contains('settings')) {
+        database.createObjectStore('settings', { keyPath: 'key' });
+      }
+      if (!database.objectStoreNames.contains('meta')) {
+        database.createObjectStore('meta', { keyPath: 'key' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+  });
+  idbConn.onversionchange = () => { try { idbConn.close(); } catch (_) {} };
+  db = {
+    getAll: (s) => idbReq(s, 'readonly', st => st.getAll()),
+    get: (s, k) => idbReq(s, 'readonly', st => st.get(k)),
+    put: (s, v) => idbReq(s, 'readwrite', st => st.put(v)),
+    add: (s, v) => idbReq(s, 'readwrite', st => st.add(v)),
+    delete: (s, k) => idbReq(s, 'readwrite', st => st.delete(k)),
+    clear: (s) => idbReq(s, 'readwrite', st => st.clear())
+  };
   return db;
+}
+
+async function requestStoragePersist() {
+  try {
+    if (navigator.storage?.persist && !(await navigator.storage.persisted())) {
+      await navigator.storage.persist();
+    }
+  } catch (_) {}
 }
 
 function uid() {
@@ -586,44 +629,27 @@ function computePeriodStats(orders, mode, period, year) {
   return s;
 }
 
-// --- PWA Service Worker ---
-function registerSW() {
+// --- 清理旧版 Service Worker（曾缓存 CDN，会导致手机端二次打开失败）---
+async function cleanupLegacySW() {
   if (!('serviceWorker' in navigator)) return;
-  const sw = `
-const CACHE='luhuo-v1';
-const ASSETS=[
-  'https://cdn.tailwindcss.com',
-  'https://unpkg.com/vue@3/dist/vue.global.prod.js',
-  'https://cdn.jsdelivr.net/npm/idb@8/build/umd.js',
-  'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'
-];
-self.addEventListener('install',e=>{
-  e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)).then(()=>self.skipWaiting()));
-});
-self.addEventListener('activate',e=>{ e.waitUntil(self.clients.claim()); });
-self.addEventListener('fetch',e=>{
-  if(e.request.method!=='GET') return;
-  e.respondWith(
-    caches.match(e.request).then(cached=>{
-      const fetched=fetch(e.request).then(res=>{
-        if(res && res.status===200 && (e.request.url.includes('cdn')||e.request.url.includes('unpkg')))
-          caches.open(CACHE).then(c=>c.put(e.request,res.clone()));
-        return res;
-      }).catch(()=>cached);
-      return cached || fetched;
-    })
-  );
-});`;
-  const blob = new Blob([sw], { type: 'application/javascript' });
-  navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(() => {});
+  try {
+    const regs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map(r => r.unregister()));
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.filter(k => k.startsWith('luhuo')).map(k => caches.delete(k)));
+    }
+  } catch (_) {}
 }
 
 function setupManifest() {
+  const base = new URL('.', location.href).href;
   const manifest = {
     name: '撸货账本',
     short_name: '撸货账本',
     description: '撸货成本收入利润管理',
-    start_url: './',
+    start_url: base,
+    scope: base,
     display: 'standalone',
     background_color: '#f9fafb',
     theme_color: '#16a34a',
@@ -1279,15 +1305,16 @@ createApp({
 
     onMounted(async () => {
       setupManifest();
-      registerSW();
+      await cleanupLegacySW();
       try {
+        await requestStoragePersist();
         await openDB();
         await loadData();
         if (Notification?.permission === 'granted') checkOverdueNotify();
         setInterval(() => { if (document.visibilityState === 'visible') checkOverdueNotify(); }, 3600000);
       } catch (e) {
         console.error(e);
-        toast('初始化失败，请刷新页面', 'error');
+        toast('初始化失败：' + (e?.message || '请刷新页面重试'), 'error');
       }
     });
 
