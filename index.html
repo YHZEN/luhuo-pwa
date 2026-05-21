@@ -483,6 +483,14 @@ async function requestStoragePersist() {
   } catch (_) {}
 }
 
+function hasNotificationAPI() {
+  return typeof window !== 'undefined' && 'Notification' in window;
+}
+
+function notificationGranted() {
+  return hasNotificationAPI() && window.Notification.permission === 'granted';
+}
+
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
 }
@@ -1195,8 +1203,8 @@ createApp({
     }
 
     async function requestNotify() {
-      if (!('Notification' in window)) { toast('当前浏览器不支持通知', 'warn'); return; }
-      const perm = await Notification.requestPermission();
+      if (!hasNotificationAPI()) { toast('当前浏览器不支持通知', 'warn'); return; }
+      const perm = await window.Notification.requestPermission();
       if (perm === 'granted') {
         checkOverdueNotify();
         toast('通知已开启');
@@ -1204,11 +1212,11 @@ createApp({
     }
 
     function checkOverdueNotify() {
-      if (!('Notification' in window) || Notification.permission !== 'granted') return;
+      if (!notificationGranted()) return;
       const overdue = orders.value.filter(o => o.status === 'sold').filter(isOverdue);
       if (overdue.length) {
         const total = overdue.reduce((s, o) => s + (o.totalSell || 0), 0);
-        new Notification('撸货账本 · 待回款提醒', {
+        new window.Notification('撸货账本 · 待回款提醒', {
           body: `${overdue.length} 笔订单超 7 天未回款，合计 ${settings.currency}${total.toFixed(settings.decimals)}`,
           icon: ICON192,
           tag: 'luhuo-overdue'
@@ -1310,7 +1318,7 @@ createApp({
         await requestStoragePersist();
         await openDB();
         await loadData();
-        if (Notification?.permission === 'granted') checkOverdueNotify();
+        if (notificationGranted()) checkOverdueNotify();
         setInterval(() => { if (document.visibilityState === 'visible') checkOverdueNotify(); }, 3600000);
       } catch (e) {
         console.error(e);
