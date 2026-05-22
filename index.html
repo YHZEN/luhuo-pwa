@@ -227,9 +227,9 @@
           </div>
           <div v-if="o.status==='pending'||o.status==='sold'" class="flex gap-1.5 px-3 pb-3 flex-wrap"
             @click.stop @touchstart.stop @touchmove.stop @touchend.stop>
-            <button v-if="o.status==='pending'" type="button" @click="quickStatus(o,'sold')" class="inline-flex items-center text-xs px-2.5 py-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-lg active:scale-95">标记已卖</button>
-            <button v-if="o.status==='sold'" type="button" @click="quickStatus(o,'completed')" class="inline-flex items-center text-xs px-2.5 py-1.5 bg-brand-100 dark:bg-brand-900/40 text-brand-700 dark:text-brand-300 rounded-lg active:scale-95">标记回款</button>
-            <button type="button" @click="quickStatus(o,'cancelled')" class="inline-flex items-center text-xs px-2.5 py-1.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg active:scale-95">取消</button>
+            <button v-if="o.status==='pending'" type="button" @click="confirmQuickStatus(o,'sold')" class="inline-flex items-center text-xs px-2.5 py-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-lg active:scale-95">标记已卖</button>
+            <button v-if="o.status==='sold'" type="button" @click="confirmQuickStatus(o,'completed')" class="inline-flex items-center text-xs px-2.5 py-1.5 bg-brand-100 dark:bg-brand-900/40 text-brand-700 dark:text-brand-300 rounded-lg active:scale-95">标记回款</button>
+            <button type="button" @click="confirmQuickStatus(o,'cancelled')" class="inline-flex items-center text-xs px-2.5 py-1.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg active:scale-95">取消</button>
           </div>
         </div>
       </div>
@@ -296,7 +296,7 @@
             <p class="text-sm mt-1">应收 <span class="font-bold text-brand-600">{{ fmt(o.totalSell) }}</span></p>
             <p class="text-xs text-gray-500">卖出 {{ formatDate(o.sellDate) }}</p>
           </div>
-          <button type="button" @click.stop="quickStatus(o,'completed')" class="text-xs bg-brand-600 text-white px-2.5 py-1.5 rounded-lg shrink-0 active:scale-95">回款</button>
+          <button type="button" @click.stop="confirmQuickStatus(o,'completed')" class="text-xs bg-brand-600 text-white px-2.5 py-1.5 rounded-lg shrink-0 active:scale-95">回款</button>
         </div>
       </div>
     </section>
@@ -466,7 +466,7 @@
       </div>
       <div class="flex-shrink-0 flex gap-2 p-4 pt-2 border-t border-gray-200 dark:border-gray-700">
         <button type="button" @click="confirmDlg.show=false" class="flex-1 py-3 rounded-lg border border-gray-200 dark:border-gray-600 active:scale-95">取消</button>
-        <button type="button" @click="confirmDlg.onOk();confirmDlg.show=false" class="flex-1 py-3 rounded-lg bg-brand-600 text-white active:scale-95">{{ confirmDlg.okText||'确定' }}</button>
+        <button type="button" @click="handleConfirmOk" class="flex-1 py-3 rounded-lg bg-brand-600 text-white active:scale-95">{{ confirmDlg.okText||'确定' }}</button>
       </div>
     </div>
   </div>
@@ -477,7 +477,7 @@ const { createApp, ref, reactive, computed, watch, onMounted, nextTick } = Vue;
 const DB_NAME = 'luhuo-db';
 const DB_VER = 1;
 const DEFAULT_PLATFORMS = ['闲鱼', '转转', '抖音', '微信', '其他'];
-const APP_VERSION = '1.0.3';
+const APP_VERSION = '1.0.4';
 const BUILD_KEY = 'luhuo-app-build';
 
 // --- PWA Icons (SVG base64) ---
@@ -568,6 +568,10 @@ function parseDate(d) {
   if (!d) return null;
   const s = typeof d === 'string' ? d.slice(0, 10) : new Date(d).toISOString().slice(0, 10);
   return s;
+}
+
+function toPlainOrder(order) {
+  return JSON.parse(JSON.stringify(order));
 }
 
 function calcOrder(o) {
@@ -1000,13 +1004,14 @@ createApp({
         };
         delete o.tagsStr;
         calcOrder(o);
-        if (o.id) {
-          await db.put('orders', o);
+        const plain = toPlainOrder(o);
+        if (plain.id) {
+          await db.put('orders', plain);
         } else {
-          o.id = uid();
-          o.createdAt = now;
-          if (!o.orderNo) o.orderNo = await generateOrderNo(o.purchaseDate);
-          await db.add('orders', o);
+          plain.id = uid();
+          plain.createdAt = now;
+          if (!plain.orderNo) plain.orderNo = await generateOrderNo(plain.purchaseDate);
+          await db.add('orders', plain);
         }
         clearDraft();
         await loadData();
@@ -1032,24 +1037,51 @@ createApp({
       openOrderForm(o);
     }
 
-    async function quickStatus(order, status) {
+    async function applyQuickStatus(order, status) {
+      if (!db) throw new Error('数据库未就绪，请刷新页面');
+      const o = toPlainOrder(order);
+      delete o.tagsStr;
+      o.status = status;
+      o.updatedAt = new Date().toISOString();
+      const t = todayStr();
+      if (status === 'sold') {
+        o.sellDate = o.sellDate || t;
+        if (o.sellPrice == null || o.sellPrice === '') o.sellPrice = o.costPrice ?? '';
+      }
+      if (status === 'completed') {
+        o.paymentDate = o.paymentDate || t;
+        if (!o.sellDate) o.sellDate = t;
+        if (o.sellPrice == null || o.sellPrice === '') o.sellPrice = o.costPrice ?? '';
+      }
+      calcOrder(o);
+      await db.put('orders', o);
+      swipeX[order.id] = 0;
+      await loadData();
+      toast(status === 'cancelled' ? '已取消' : '状态已更新');
+      if (tab.value === 'stats') refreshCharts();
+    }
+
+    function confirmQuickStatus(order, status) {
+      const cfg = {
+        sold: { title: '标记已卖', msg: `将「${order.productName}」标为已卖出、待回款？`, ok: '确定' },
+        completed: { title: '标记回款', msg: `确认「${order.productName}」已收到回款？`, ok: '确认回款' },
+        cancelled: { title: '取消订单', msg: `确定取消「${order.productName}」？取消后仍保留记录。`, ok: '确认取消' }
+      }[status] || { title: '确认操作', msg: '确定执行此操作？', ok: '确定' };
+      confirmDlg.title = cfg.title;
+      confirmDlg.msg = cfg.msg;
+      confirmDlg.okText = cfg.ok;
+      confirmDlg.onOk = () => applyQuickStatus(order, status);
+      confirmDlg.show = true;
+    }
+
+    async function handleConfirmOk() {
       try {
-        const o = { ...order, status, updatedAt: new Date().toISOString() };
-        const t = todayStr();
-        if (status === 'sold') {
-          o.sellDate = o.sellDate || t;
-          if (o.sellPrice == null && o.costPrice) o.sellPrice = o.costPrice;
-        }
-        if (status === 'completed') o.paymentDate = o.paymentDate || t;
-        calcOrder(o);
-        await db.put('orders', o);
-        swipeX[order.id] = 0;
-        await loadData();
-        toast(status === 'cancelled' ? '已取消' : '状态已更新');
-        if (tab.value === 'stats') refreshCharts();
+        await confirmDlg.onOk();
+        confirmDlg.show = false;
       } catch (e) {
         console.error(e);
-        toast('操作失败，请重试', 'error');
+        confirmDlg.show = false;
+        toast('操作失败：' + (e?.message || '请重试'), 'error');
       }
     }
 
@@ -1120,7 +1152,12 @@ createApp({
         for (const id of selectedIds.value) {
           const o = orders.value.find(x => x.id === id);
           if (!o) continue;
-          const updated = { ...o, status: 'completed', paymentDate: o.paymentDate || t, updatedAt: new Date().toISOString() };
+          const updated = toPlainOrder(o);
+          updated.status = 'completed';
+          updated.paymentDate = updated.paymentDate || t;
+          updated.updatedAt = new Date().toISOString();
+          if (!updated.sellDate) updated.sellDate = t;
+          if (updated.sellPrice == null || updated.sellPrice === '') updated.sellPrice = updated.costPrice ?? '';
           calcOrder(updated);
           await db.put('orders', updated);
         }
@@ -1460,7 +1497,7 @@ createApp({
       receivableList, receivableTotal, buyerDebts, DEFAULT_PLATFORMS,
       fmt, formatDate, statusLabel, statusClass, toast, loadData, toggleTheme, saveSettings,
       switchTab, goReceivables, clearFilters, openOrderForm, closeForm, saveOrder, calcForm, onStatusChange, saveDraft,
-      quickStatus, confirmDelete, onOrderRowClick, swipeStart, swipeMove, swipeEnd,
+      confirmQuickStatus, handleConfirmOk, confirmDelete, onOrderRowClick, swipeStart, swipeMove, swipeEnd,
       onPullStart, onPullMove, onPullEnd, isOverdue, batchComplete,
       exportCSV, exportJSON, importJSON, importCSV, clearAllData,
       addPlatform, removePlatform, addTemplate, useTemplate, requestNotify, refreshCharts,
