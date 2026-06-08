@@ -874,7 +874,8 @@ createApp({
     }
 
     async function loadData() {
-      loading.value = true;
+      const showSkeleton = loading.value || orders.value.length === 0;
+      if (showSkeleton) loading.value = true;
       try {
         orders.value = await getAllOrders();
         settings.dark = await getSetting('dark', false);
@@ -888,6 +889,7 @@ createApp({
         toast('数据加载失败', 'error');
       } finally {
         loading.value = false;
+        if (tab.value === 'stats') nextTick(() => refreshCharts());
       }
     }
 
@@ -1058,7 +1060,6 @@ createApp({
       swipeX[order.id] = 0;
       await loadData();
       toast(status === 'cancelled' ? '已取消' : '状态已更新');
-      if (tab.value === 'stats') refreshCharts();
     }
 
     function confirmQuickStatus(order, status) {
